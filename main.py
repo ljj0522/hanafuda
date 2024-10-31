@@ -5,17 +5,10 @@ from colorama import init, Fore, Style
 from web3 import Web3
 import aiohttp
 import argparse
-
+from utils.banner import banner 
 init(autoreset=True)
 
-print(Fore.CYAN + Style.BRIGHT + """███████╗██╗     ██╗  ██╗     ██████╗██╗   ██╗██████╗ ███████╗██████╗ """ + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """╚══███╔╝██║     ██║ ██╔╝    ██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗""" + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """  ███╔╝ ██║     █████╔╝     ██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝""" + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """ ███╔╝  ██║     ██╔═██╗     ██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗""" + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """███████╗███████╗██║  ██╗    ╚██████╗   ██║   ██████╔╝███████╗██║  ██║""" + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """╚══════╝╚══════╝╚═╝  ╚═╝     ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝""" + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """    Auto Deposit ETH for HANA Network / Auto Grow and Open Garden    """ + Style.RESET_ALL)
-print(Fore.CYAN + Style.BRIGHT + """                t.me/zlkcyber *** github.com/zlkcyber                """ + Style.RESET_ALL)
+print(Fore.CYAN + Style.BRIGHT + banner + Style.RESET_ALL)
 
 RPC_URL = "https://mainnet.base.org"
 CONTRACT_ADDRESS = "0xC5bf05cD32a14BFfb705Fb37a9d218895187376c"
@@ -41,11 +34,6 @@ contract_abi = '''
     }
 ]
 '''
-
-amount_wei = web3.to_wei(AMOUNT_ETH, 'ether')
-contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=json.loads(contract_abi))
-
-nonces = {key: web3.eth.get_transaction_count(web3.eth.account.from_key(key).address) for key in private_keys}
 
 headers = {
     'Accept': '*/*',
@@ -76,43 +64,54 @@ async def handle_grow_and_garden(session, refresh_token):
     headers['authorization'] = f'Bearer {new_access_token}'
 
     info_query = {
-        "query": "query CurrentUser { currentUser { id sub name iconPath depositCount totalPoint evmAddress { userId address } inviter { id name } } }",
-        "operationName": "CurrentUser"
+        "query": "query getCurrentUser { "
+                    "currentUser { id totalPoint depositCount } "
+                    "getGardenForCurrentUser { "
+                    "gardenStatus { growActionCount gardenRewardActionCount } "
+                    "} "
+                    "}",
+        "operationName": "getCurrentUser"
     }
     info = await colay(session, api_url, 'POST', info_query)
     
     balance = info['data']['currentUser']['totalPoint']
     deposit = info['data']['currentUser']['depositCount']
+    grow = info['data']['getGardenForCurrentUser']['gardenStatus']['growActionCount']
+    garden = info['data']['getGardenForCurrentUser']['gardenStatus']['gardenRewardActionCount']
 
-    bet_query = {
-        "query": "query GetGardenForCurrentUser { getGardenForCurrentUser { id inviteCode gardenDepositCount gardenStatus { id activeEpoch growActionCount gardenRewardActionCount } gardenMilestoneRewardInfo { id gardenDepositCountWhenLastCalculated lastAcquiredAt createdAt } gardenMembers { id sub name iconPath depositCount } } }",
-        "operationName": "GetGardenForCurrentUser"
-    }
-    profile = await colay(session, api_url, 'POST', bet_query)
-    
-    grow = profile['data']['getGardenForCurrentUser']['gardenStatus']['growActionCount']
-    garden = profile['data']['getGardenForCurrentUser']['gardenStatus']['gardenRewardActionCount']
     print(f"{Fore.GREEN}POINTS: {balance} | Deposit Counts: {deposit} | Grow left: {grow} | Garden left: {garden}{Style.RESET_ALL}")
 
-    while grow > 0:
+    async def grow_action():
         action_query = {
-            "query": "mutation issueGrowAction { issueGrowAction }",
+            "query": "mutation issueGrowAction { issueGrowAction commitGrowAction }",
             "operationName": "issueGrowAction"
         }
-        mine = await colay(session, api_url, 'POST', action_query)
-        reward = mine['data']['issueGrowAction']
-        balance += reward
-        grow -= 1
-        print(f"{Fore.GREEN}Rewards: {reward} | Balance: {balance} | Grow left: {grow}{Style.RESET_ALL}")
-        await asyncio.sleep(1)
-        
-        commit_query = {
-            "query": "mutation commitGrowAction { commitGrowAction }",
-            "operationName": "commitGrowAction"
-        }
-        await colay(session, api_url, 'POST', commit_query)
-        
+                        
+        try:
+            mine = await colay(session, api_url, 'POST', action_query)            
+            
+            if mine and 'data' in mine and 'issueGrowAction' in mine['data']:
+                reward = mine['data']['issueGrowAction']
+                return reward
+            else:
+                print(f"{Fore.RED}Error: Unexpected response format: {mine}{Style.RESET_ALL}")
+                return 0  
+        except Exception as e:
+            #print(f"{Fore.RED}Error during grow action: {str(e)}{Style.RESET_ALL}")
+            return 0
 
+    while grow > 0:
+
+        grow_count = min(grow, 10)
+        tasks = [grow_action() for _ in range(grow_count)]
+        results = await asyncio.gather(*tasks)
+
+        for reward in results:
+            if reward != 0:
+                balance += reward
+                grow -= 1
+                print(f"{Fore.GREEN}Rewards: {reward} | Balance: {balance} | Grow left: {grow}{Style.RESET_ALL}")
+        
     while garden >= 10:
         garden_action_query = {
             "query": "mutation executeGardenRewardAction($limit: Int!) { executeGardenRewardAction(limit: $limit) { data { cardId group } isNew } }",
@@ -123,12 +122,16 @@ async def handle_grow_and_garden(session, refresh_token):
         card_ids = [item['data']['cardId'] for item in mine_garden['data']['executeGardenRewardAction']]
         print(f"{Fore.GREEN}Opened Garden: {card_ids}{Style.RESET_ALL}")
         garden -= 10
-        
 
+        
 async def handle_eth_transactions(session, num_transactions):
     global nonces
+    amount_wei = web3.to_wei(AMOUNT_ETH, 'ether')
+    contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=json.loads(contract_abi))
+    nonces = {key: web3.eth.get_transaction_count(web3.eth.account.from_key(key).address) for key in private_keys}
     for i in range(num_transactions):
         for private_key in private_keys:
+            
             from_address = web3.eth.account.from_key(private_key).address
             short_from_address = from_address[:4] + "..." + from_address[-4:]
 
