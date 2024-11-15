@@ -83,8 +83,11 @@ async def handle_grow_and_garden(session, refresh_token):
 
     async def grow_action():
         action_query = {
-            "query": "mutation issueGrowAction { issueGrowAction commitGrowAction }",
-            "operationName": "issueGrowAction"
+            "query": "mutation ExecuteGrowAction($withAll: Boolean) {\n  executeGrowAction(withAll: $withAll) {\n    baseValue\n    leveragedValue\n    totalValue\n    multiplyRate\n  }\n}",
+            "operationName": "ExecuteGrowAction",
+            "variables":{
+                "withAll":True
+            }
         }
                         
         try:
@@ -100,17 +103,10 @@ async def handle_grow_and_garden(session, refresh_token):
             #print(f"{Fore.RED}Error during grow action: {str(e)}{Style.RESET_ALL}")
             return 0
 
-    while grow > 0:
+    if grow > 0:
 
-        grow_count = min(grow, 10)
-        tasks = [grow_action() for _ in range(grow_count)]
-        results = await asyncio.gather(*tasks)
-
-        for reward in results:
-            if reward != 0:
-                balance += reward
-                grow -= 1
-                print(f"{Fore.GREEN}Rewards: {reward} | Balance: {balance} | Grow left: {grow}{Style.RESET_ALL}")
+        results = await grow_action()
+        print(f"{Fore.GREEN}Rewards: {results} | Balance: {balance} | Grow left: {grow}{Style.RESET_ALL}")
         
     while garden >= 10:
         garden_action_query = {
